@@ -36,18 +36,9 @@ public class Program
 
         await conversation.StartSessionAsync();
 
-        var lastRole = string.Empty;
         await conversation.GetSessionUpdatesAsync((role, content) =>
         {
-            var isUser = role.ToLower() == "user";
-            role = isUser ? "User" : $"{char.ToUpper(role[0])}{role.Substring(1)}";
-            if (role != lastRole)
-            {
-                if (!string.IsNullOrEmpty(lastRole)) ConsoleHelpers.Write("\n\n");
-                ConsoleHelpers.Write($"\r{role}: ");
-                lastRole = role;
-            }
-            ConsoleHelpers.Write(content);
+            ConsoleHelpers.EnsureWriteRoleAndContent(role, content);
         });
     }
 }

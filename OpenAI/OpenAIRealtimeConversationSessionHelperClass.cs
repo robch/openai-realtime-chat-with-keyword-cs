@@ -14,13 +14,6 @@ public class OpenAIRealtimeConversationSessionHelperClass
         return "Tell the user that they can wake you back up using your name (but don't tell them your name, as it might wake you up)";
     }
 
-    // [HelperFunctionDescription("Starts listening; If the user only says your name, you should call this function.")]
-    // public static string StartListening()
-    // {
-    //     Current?.StartListeningInternalAkaWakeUp();
-    //     return "Listening now...";
-    // }
-
     public OpenAIRealtimeConversationSessionHelperClass(string apiKey, string endpoint, string model, string instructions, FunctionFactory factory, AudioSourceController audioSourceController, AudioSourceControlStream audioSourceControlStream, SpeakerAudioOutputStream speaker)
     {
         _client = new AzureOpenAIClient(new Uri(endpoint), new ApiKeyCredential(apiKey));
@@ -33,7 +26,6 @@ public class OpenAIRealtimeConversationSessionHelperClass
         _audioSourceControlStream = audioSourceControlStream;
 
         _speaker = speaker;
-        _speaker.PlaybackStarted += Speaker_PlaybackStarted;
         _speaker.PlaybackFinished += Speaker_PlaybackFinished;
 
         _sessionOptions = new ConversationSessionOptions() 
@@ -44,8 +36,7 @@ public class OpenAIRealtimeConversationSessionHelperClass
                 Model = "whisper-1",
             },
             Voice = "dan"
-            // 'amuch' - sounds like a dj
-            // , 'dan', 'elan', 'marilyn', 'meadow', 'breeze', 'cove', 'ember', 'jupiter', 'alloy', 'echo', and 'shimmer'
+            // Current choices: 'amuch', 'dan', 'elan', 'marilyn', 'meadow', 'breeze', 'cove', 'ember', 'jupiter', 'alloy', 'echo', and 'shimmer'
         };
 
         foreach (var tool in _functionFactory.GetTools())
@@ -64,7 +55,6 @@ public class OpenAIRealtimeConversationSessionHelperClass
         await _session.ConfigureSessionAsync(_sessionOptions);
 
         _audioSourceController.TransitionToOpenMic();
-        // _audioSourceController.TransitionToKeywordArmed();
     }
 
     public async Task GetSessionUpdatesAsync(Action<string, string> callback)
@@ -130,7 +120,6 @@ public class OpenAIRealtimeConversationSessionHelperClass
         if (Program.Debug) Console.WriteLine("Connected: session started");
         _ = Task.Run(async () =>
         {
-            // callback("assistant", "Listening...\n");
             await _session.SendInputAudioAsync(_audioSourceControlStream);
             callback("user", "");
         });
@@ -140,7 +129,6 @@ public class OpenAIRealtimeConversationSessionHelperClass
     {
         if (Program.Debug) Console.WriteLine("Start of speech detected");
         _speaker.ClearPlayback();
-        callback("user", "");
     }
 
     private void HandleInputSpeechFinished()
@@ -151,9 +139,8 @@ public class OpenAIRealtimeConversationSessionHelperClass
 
     private void HandleInputTranscriptionFinished(Action<string, string> callback, ConversationInputTranscriptionFinishedUpdate transcriptionUpdate)
     {
-        callback?.Invoke("user", $"{transcriptionUpdate.Transcript}");
+        callback.Invoke("user", $"{transcriptionUpdate.Transcript}");
         StopBufferingAssistantTextOutputs(callback);
-        // callback?.Invoke("assistant", "");
 
         if (_audioSourceController.State == AudioSourceState.OpenMic)
         {
@@ -161,7 +148,7 @@ public class OpenAIRealtimeConversationSessionHelperClass
         }
         else if (_audioSourceController.State == AudioSourceState.KeywordArmed)
         {
-            _audioSourceController.TransitionToKeywordArmed();
+            _audioSourceController.TransitionToKeywordArmed(playSound: false);
         }
     }
 
@@ -192,14 +179,10 @@ public class OpenAIRealtimeConversationSessionHelperClass
 
     private void HandleItemStreamingPartFinishedUpdate(Action<string, string> callback, ConversationItemStreamingPartFinishedUpdate update)
     {
-        if (IsBufferingAssistantTextOutputs())
-        {
-            BufferAssistantTextOutput("\n");
-        }
-        else
-        {
-            callback?.Invoke("assistant", "\n");
-        }
+        var textIsQuestion = update.Text != null && update.Text.Trim(new [] { '\r', '\n', ' ' }).EndsWith('?');
+        var transcriptIsQuestion = update.AudioTranscript != null && update.AudioTranscript.Trim(new [] { '\r', '\n', ' ' }).EndsWith('?');
+
+        _openMicWhenPlaybackIsFinished = textIsQuestion || transcriptIsQuestion;
     }
 
     private async Task HandleItemStreamingFinishedUpdateAsync(Action<string, string> callback, ConversationItemStreamingFinishedUpdate update)
@@ -239,30 +222,21 @@ public class OpenAIRealtimeConversationSessionHelperClass
         }
     }
 
-    private void Speaker_PlaybackStarted(object? sender, EventArgs e)
-    {
-        // if (_audioSourceController.State == AudioSourceState.OpenMic)
-        // {
-        //     _audioSourceController.Mute();
-        // }
-        // else if (_audioSourceController.State == AudioSourceState.KeywordArmed)
-        // {
-        //     _audioSourceController.TransitionToKeywordArmed();
-        // }
-    }
-
     private void Speaker_PlaybackFinished(object? sender, EventArgs e)
     {
         var playbackFinishedTime = DateTime.UtcNow;
         if (playbackFinishedTime >= _responseFinishedTime && _responseFinishedTime >= _responseStartedTime)
         {
-            var unMute = !_ignoreNextFinishedAudioCue && _audioSourceController.IsMuted;
-            if (unMute)
+            if (!_ignoreNextFinishedAudioCue && _audioSourceController.IsMuted)
             {
                 _audioSourceController.UnMute();
             }
 
-            if (_audioSourceController.State == AudioSourceState.KeywordArmed)
+            if (_openMicWhenPlaybackIsFinished)
+            {
+                _audioSourceController.TransitionToOpenMic();
+            }
+            else if (_audioSourceController.State == AudioSourceState.KeywordArmed)
             {
                 _audioSourceController.TransitionToKeywordArmed();
             }
@@ -289,22 +263,20 @@ public class OpenAIRealtimeConversationSessionHelperClass
 
     private void HandleAssistantFunctionCallOutput(Action<string, string> callback, string output)
     {
-        // if (IsBufferingAssistantTextOutputs())
-        // {
-        //     BufferAssistantFunctionOutputs(output);
-        // }
-        // else
-        // {
-        //     callback?.Invoke("assistant", "");
+        if (IsBufferingAssistantTextOutputs())
+        {
+            BufferAssistantFunctionOutputs(output);
+        }
+        else
+        {
+            callback?.Invoke("assistant", "");
 
-        //     var previous = Console.ForegroundColor;
-        //     Console.ForegroundColor = ConsoleColor.DarkGray;
-        //     ConsoleHelpers.Write($"\rassistant-function: {output}\n");
-        //     Console.ForegroundColor = previous;
+            var previous = Console.ForegroundColor;
+            Console.ForegroundColor = ConsoleColor.DarkGray;
 
-        //     callback?.Invoke("assistant", "");
-        //     ConsoleHelpers.Write("\rAssistant: ");
-        // }
+            callback?.Invoke("assistant", output);
+            Console.ForegroundColor = previous;
+        }
     }
 
     private void BufferAssistantFunctionOutputs(string output)
@@ -318,17 +290,17 @@ public class OpenAIRealtimeConversationSessionHelperClass
         {
             if (_bufferAssistantFunctionCallOutputs.Count() > 0)
             {
-                // callback?.Invoke("assistant", "");
+                callback?.Invoke("assistant", "");
 
-                // var previous = Console.ForegroundColor;
-                // Console.ForegroundColor = ConsoleColor.DarkGray;
-                // foreach (var output in _bufferAssistantFunctionCallOutputs)
-                // {
-                //     ConsoleHelpers.Write($"\rassistant-function: {output}\n");
-                // }
-                // Console.ForegroundColor = previous;
-                // callback?.Invoke("assistant", "");
-                // ConsoleHelpers.Write("\rAssistant: ");
+                var previous = Console.ForegroundColor;
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+
+                foreach (var output in _bufferAssistantFunctionCallOutputs)
+                {
+                    callback?.Invoke("assistant", output);
+                }
+
+                Console.ForegroundColor = previous;
             }
             _bufferAssistantFunctionCallOutputs = null;
         }
@@ -348,7 +320,7 @@ public class OpenAIRealtimeConversationSessionHelperClass
     private void StopListeningInternalAkaGoToSleep()
     {
         _ignoreNextFinishedAudioCue = true;
-        _audioSourceController.TransitionToKeywordArmed();
+        _audioSourceController.TransitionToKeywordArmed(playSound: false);
     }
 
     private static OpenAIRealtimeConversationSessionHelperClass? Current;
@@ -371,4 +343,5 @@ public class OpenAIRealtimeConversationSessionHelperClass
     private StringBuilder? _bufferAssistantTextOutputs;
     private List<string>? _bufferAssistantFunctionCallOutputs;
     private bool _ignoreNextFinishedAudioCue;
+    private bool _openMicWhenPlaybackIsFinished;
 }

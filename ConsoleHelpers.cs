@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 
 public class ConsoleHelpers
 {
@@ -14,6 +15,36 @@ public class ConsoleHelpers
         {
             HandleKeys(audioSourceController, speaker);
         });
+    }
+
+    public static void EnsureWriteLabel(string label)
+    {
+        lock (_consoleWriteSyncLock)
+        {
+            label = $"{char.ToUpper(label[0])}{label.Substring(1)}";
+            if (label != _lastLabel)
+            {
+                EnsureWriteNewLinesForNewLabel();
+                _lastLabelContent.Clear();
+
+                ConsoleHelpers.Write($"\r{label}: ");
+                _lastLabel = label;
+            }
+        }
+    }
+
+    public static void EnsureWriteRoleAndContent(string role, string content)
+    {
+        lock (_consoleWriteSyncLock)
+        {
+            EnsureWriteLabel(role);
+
+            if (!string.IsNullOrEmpty(content))
+            {
+                _lastLabelContent.Append(content);
+                Write(content);
+            }
+        }
     }
 
     public static void Write(string message, ConsoleColor? color = null, bool savePos = false, int atX = -1, int atY = -1)
@@ -81,7 +112,7 @@ public class ConsoleHelpers
         else if (key.Key == ConsoleKey.D)
         {
             Program.Debug = !Program.Debug;
-            ConsoleHelpers.Write($"Debug mode: {Program.Debug}\n\n");
+            EnsureWriteRoleAndContent("Debug", Program.Debug.ToString());
         }
         else if (key.Key == ConsoleKey.M)
         {
@@ -95,6 +126,25 @@ public class ConsoleHelpers
         else if (key.Key == ConsoleKey.K)
         {
             audioSourceController.ToggleKeywordState();
+        }
+    }
+
+    private static void EnsureWriteNewLinesForNewLabel()
+    {
+        var mightNeedNewLines = _lastLabelContent.Length > 0;
+        if (mightNeedNewLines)
+        {
+            var alreadyHasNewLineCount = _lastLabelContent.ToString()
+                .Reverse()
+                .TakeWhile(c => c == '\r' || c == '\n')
+                .Where(c => c == '\n')
+                .Count();
+            var needNewLineCount = Math.Max(0, 3 - alreadyHasNewLineCount);
+
+            if (needNewLineCount > 0)
+            {
+                Write(new string('\n', needNewLineCount));
+            }
         }
     }
 
@@ -121,4 +171,7 @@ public class ConsoleHelpers
     }
 
     private static object _consoleWriteSyncLock = new();
+
+    private static string _lastLabel = string.Empty;
+    private static StringBuilder _lastLabelContent = new();
 }

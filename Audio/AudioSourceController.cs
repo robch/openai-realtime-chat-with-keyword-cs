@@ -20,7 +20,7 @@ public class AudioSourceController
         _isMuted = false;
     }
 
-    public void TransitionToOff()
+    public void TransitionToOff(bool playSound = true)
     {
         State = AudioSourceState.Off;
 
@@ -30,10 +30,10 @@ public class AudioSourceController
         OnStateChanged(State);
 
         DisplayOutput?.Invoke(this, "Off");
-        SoundOutput?.Invoke(this, SoundEventArgs.CueForOff());
+        if (playSound) SoundOutput?.Invoke(this, SoundEventArgs.CueForOff());
     }
 
-    public void TransitionToOpenMic()
+    public void TransitionToOpenMic(bool playSound = true)
     {
         State = AudioSourceState.OpenMic;
 
@@ -41,10 +41,10 @@ public class AudioSourceController
         _keywordAudioSource.Stop();
 
         OnStateChanged(State);
-        UnMute();
+        UnMute(playSound);
     }
 
-    public void TransitionToKeywordArmed()
+    public void TransitionToKeywordArmed(bool playSound = true)
     {
         State = AudioSourceState.KeywordArmed;
 
@@ -52,51 +52,51 @@ public class AudioSourceController
         _naudioMicSource.Stop();
 
         OnStateChanged(State);
-        UnMute();
+        UnMute(playSound);
     }
 
-    public void ToggleKeywordState()
+    public void ToggleKeywordState(bool playSound = true)
     {
         switch (State)
         {
             case AudioSourceState.Off:
             case AudioSourceState.OpenMic:
-                TransitionToKeywordArmed();
+                TransitionToKeywordArmed(playSound);
                 break;
 
             case AudioSourceState.KeywordArmed:
-                TransitionToOff();
+                TransitionToOff(playSound);
                 break;
         }
     }
 
-    public void ToggleState()
+    public void ToggleState(bool playSound = true)
     {
         switch (State)
         {
             case AudioSourceState.Off:
             case AudioSourceState.KeywordArmed:
-                TransitionToOpenMic();
+                TransitionToOpenMic(playSound);
                 break;
 
             case AudioSourceState.OpenMic:
                 if (IsMuted)
                 {
-                    UnMute();
+                    UnMute(playSound);
                 }
                 else
                 {
-                    TransitionToOff();
+                    TransitionToOff(playSound);
                 }
                 break;
         }
     }
 
-    public void ToggleMute()
+    public void ToggleMute(bool playSound = true)
     {
         if (_isMuted)
         {
-            UnMute();
+            UnMute(playSound);
         }
         else
         {

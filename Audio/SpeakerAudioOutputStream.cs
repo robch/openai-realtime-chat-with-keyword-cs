@@ -5,23 +5,10 @@ public class NotifyingBufferedWaveProvider : BufferedWaveProvider, IWaveProvider
     private DateTime? _fireEmptyAfter;
     private TimeSpan _debounceTimeSpan = TimeSpan.FromMilliseconds(650);
 
-    public event EventHandler SamplesAdded;
     public event EventHandler BufferEmptied;
 
     public NotifyingBufferedWaveProvider(WaveFormat waveFormat) : base(waveFormat)
     {
-    }
-
-    public new void AddSamples(byte[] buffer, int offset, int count)
-    {
-        int before = BufferedBytes;
-        base.AddSamples(buffer, offset, count);
-        int after = BufferedBytes;
-
-        if (before == 0 && _fireEmptyAfter == null)
-        {
-            SamplesAdded?.Invoke(this, EventArgs.Empty);
-        }
     }
 
     int IWaveProvider.Read(byte[] buffer, int offset, int count)
@@ -59,12 +46,11 @@ public class SpeakerAudioOutputStream : IDisposable
             rate: 24000,
             bits: 16,
             channels: 1);
+
         _waveProvider = new(outputAudioFormat)
         {
             BufferDuration = TimeSpan.FromMinutes(2),
         };
-
-        _waveProvider.SamplesAdded += (s, e) => PlaybackStarted?.Invoke(this, EventArgs.Empty);
         _waveProvider.BufferEmptied += (s, e) => PlaybackFinished?.Invoke(this, EventArgs.Empty);
 
         _waveOutEvent = new();
@@ -72,7 +58,6 @@ public class SpeakerAudioOutputStream : IDisposable
         _waveOutEvent.Play();
     }
 
-    public event EventHandler PlaybackStarted;
     public event EventHandler PlaybackFinished;
 
     public void EnqueueForPlayback(BinaryData audioData)
