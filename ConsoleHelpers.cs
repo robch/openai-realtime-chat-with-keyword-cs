@@ -106,6 +106,7 @@ public class ConsoleHelpers
     private static void OnAudioSourceControllerDisplayOutput(object? sender, string e)
     {
         var message = $"[{e}]";
+        var length = message.Length;
 
         var addSpaces = Console.WindowWidth - message.Length;
         if (addSpaces > 0)
@@ -115,6 +116,8 @@ public class ConsoleHelpers
 
         var y = Math.Max(Console.CursorTop - 1, 0);
         Write($"{message}\r", ConsoleColor.DarkBlue, true, 0, y);
+
+        Write("[SPACEBAR]-Toggle  [K]-Keyword  [X]-Exit", ConsoleColor.DarkGray, true, 24, y);
     }
 
     private static object _consoleWriteSyncLock = new();

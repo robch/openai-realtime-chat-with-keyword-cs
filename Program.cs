@@ -31,7 +31,7 @@ public class Program
         var conversation = new OpenAIRealtimeConversationSessionHelperClass(openAIAPIKey, openAIEndpoint, openAIChatDeploymentName, openAISystemPrompt, factory, audioSourceController, audioSourceControlStream, speaker);
 
         ConsoleHelpers.Write($"Hi, I'm {name}! Say my name or press the spacebar to talk to me, or 'X' to exit.\n\n\nUser: ");
-        ConsoleHelpers.Write("[Off]", ConsoleColor.DarkBlue, true, 0, Math.Max(Console.CursorTop - 1, 0));
+        ConsoleHelpers.Write("[...]", ConsoleColor.DarkBlue, true, 0, Math.Max(Console.CursorTop - 1, 0));
         _ = ConsoleHelpers.HandleKeysAsync(audioSourceController, speaker);
 
         await conversation.StartSessionAsync();
@@ -40,7 +40,7 @@ public class Program
         await conversation.GetSessionUpdatesAsync((role, content) =>
         {
             var isUser = role.ToLower() == "user";
-            role = isUser ? "User" : "Assistant";
+            role = isUser ? "User" : $"{char.ToUpper(role[0])}{role.Substring(1)}";
             if (role != lastRole)
             {
                 if (!string.IsNullOrEmpty(lastRole)) ConsoleHelpers.Write("\n\n");

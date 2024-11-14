@@ -10,9 +10,16 @@ public class OpenAIRealtimeConversationSessionHelperClass
     [HelperFunctionDescription("Stops listening, but switching to 'keyword activation' mode; If the user asks to 'Go to sleep', you should call this function.")]
     public static string StopListening()
     {
-        Task.Run(() => Current?.StopListeningInternalAkaGoToSleep());
+        Current?.StopListeningInternalAkaGoToSleep();
         return "Tell the user that they can wake you back up using your name (but don't tell them your name, as it might wake you up)";
     }
+
+    // [HelperFunctionDescription("Starts listening; If the user only says your name, you should call this function.")]
+    // public static string StartListening()
+    // {
+    //     Current?.StartListeningInternalAkaWakeUp();
+    //     return "Listening now...";
+    // }
 
     public OpenAIRealtimeConversationSessionHelperClass(string apiKey, string endpoint, string model, string instructions, FunctionFactory factory, AudioSourceController audioSourceController, AudioSourceControlStream audioSourceControlStream, SpeakerAudioOutputStream speaker)
     {
@@ -26,6 +33,7 @@ public class OpenAIRealtimeConversationSessionHelperClass
         _audioSourceControlStream = audioSourceControlStream;
 
         _speaker = speaker;
+        _speaker.PlaybackStarted += Speaker_PlaybackStarted;
         _speaker.PlaybackFinished += Speaker_PlaybackFinished;
 
         _sessionOptions = new ConversationSessionOptions() 
@@ -56,6 +64,7 @@ public class OpenAIRealtimeConversationSessionHelperClass
         await _session.ConfigureSessionAsync(_sessionOptions);
 
         _audioSourceController.TransitionToOpenMic();
+        // _audioSourceController.TransitionToKeywordArmed();
     }
 
     public async Task GetSessionUpdatesAsync(Action<string, string> callback)
@@ -77,10 +86,6 @@ public class OpenAIRealtimeConversationSessionHelperClass
                     HandleSessionStarted(callback);
                     break;
 
-                case ConversationAudioDeltaUpdate audioDeltaUpdate:
-                    HandleAudioDelta(audioDeltaUpdate);
-                    break;
-
                 case ConversationInputSpeechStartedUpdate:
                     HandleInputSpeechStarted(callback);
                     break;
@@ -97,16 +102,16 @@ public class OpenAIRealtimeConversationSessionHelperClass
                     HandleResponseStarted(callback, responseStartedUpdate);
                     break;
 
-                case ConversationOutputTranscriptionDeltaUpdate outputTranscriptionDeltaUpdate:
-                    HandleOutputTranscriptionDelta(callback, outputTranscriptionDeltaUpdate);
+                case ConversationItemStreamingPartDeltaUpdate itemStreamingPartDeltaUpdate:
+                    HandleItemStreamingPartDeltaUpdate(callback, itemStreamingPartDeltaUpdate);
                     break;
 
-                case ConversationOutputTranscriptionFinishedUpdate:
-                    HandleOutputTranscriptionFinished(callback);
+                case ConversationItemStreamingPartFinishedUpdate itemStreamingPartFinishedUpdate:
+                    HandleItemStreamingPartFinishedUpdate(callback, itemStreamingPartFinishedUpdate);
                     break;
 
-                case ConversationItemFinishedUpdate itemFinishedUpdate:
-                    await HandleItemFinished(itemFinishedUpdate);
+                case ConversationItemStreamingFinishedUpdate itemStreamingFinishedUpdate:
+                    await HandleItemStreamingFinishedUpdateAsync(callback, itemStreamingFinishedUpdate);
                     break;
 
                 case ConversationResponseFinishedUpdate responseFinishedUpdate:
@@ -114,7 +119,7 @@ public class OpenAIRealtimeConversationSessionHelperClass
                     break;
 
                 case ConversationErrorUpdate errorUpdate:
-                    Console.WriteLine($"ERROR: {errorUpdate.ErrorMessage}");
+                    Console.WriteLine($"ERROR: {errorUpdate.Message}");
                     return;
             }
         }
@@ -126,14 +131,9 @@ public class OpenAIRealtimeConversationSessionHelperClass
         _ = Task.Run(async () =>
         {
             // callback("assistant", "Listening...\n");
-            await _session.SendAudioAsync(_audioSourceControlStream);
+            await _session.SendInputAudioAsync(_audioSourceControlStream);
             callback("user", "");
         });
-    }
-
-    private void HandleAudioDelta(ConversationAudioDeltaUpdate audioUpdate)
-    {
-        _speaker.EnqueueForPlayback(audioUpdate.Delta);
     }
 
     private void HandleInputSpeechStarted(Action<string, string> callback)
@@ -146,13 +146,15 @@ public class OpenAIRealtimeConversationSessionHelperClass
     private void HandleInputSpeechFinished()
     {
         if (Program.Debug) Console.WriteLine("End of speech detected");
-        StartBufferingOutputTranscriptionDeltas();
+        StartBufferingAssistantTextOutputs();
     }
 
     private void HandleInputTranscriptionFinished(Action<string, string> callback, ConversationInputTranscriptionFinishedUpdate transcriptionUpdate)
     {
         callback?.Invoke("user", $"{transcriptionUpdate.Transcript}");
-        StopBufferingOutputTranscriptionDeltas(callback);
+        StopBufferingAssistantTextOutputs(callback);
+        // callback?.Invoke("assistant", "");
+
         if (_audioSourceController.State == AudioSourceState.OpenMic)
         {
             _audioSourceController.Mute();
@@ -161,40 +163,64 @@ public class OpenAIRealtimeConversationSessionHelperClass
         {
             _audioSourceController.TransitionToKeywordArmed();
         }
-
-    }
-
-    private void HandleOutputTranscriptionDelta(Action<string, string> callback, ConversationOutputTranscriptionDeltaUpdate transcriptionUpdate)
-    {
-        if (IsBufferingOutputTranscriptionDeltas())
-        {
-            BufferOutputTranscriptionDelta(transcriptionUpdate.Delta);
-        }
-        else
-        {
-            callback?.Invoke("assistant", transcriptionUpdate.Delta);
-        }
-    }
-
-    private void HandleOutputTranscriptionFinished(Action<string, string> callback)
-    {
-        callback?.Invoke("assistant", "\n");
-    }
-
-    private async Task HandleItemFinished(ConversationItemFinishedUpdate itemFinishedUpdate)
-    {
-        if (_functionFactory.TryCallFunction(itemFinishedUpdate.FunctionName, itemFinishedUpdate.FunctionCallArguments, out var result))
-        {
-            await _session.AddItemAsync(ConversationItem.CreateFunctionCallOutput(
-                callId: itemFinishedUpdate.FunctionCallId,
-                output: result));
-        }
     }
 
     private void HandleResponseStarted(Action<string, string> callback, ConversationResponseStartedUpdate responseStartedUpdate)
     {
         _responseStartedTime = DateTime.UtcNow;
     }
+
+    private void HandleItemStreamingPartDeltaUpdate(Action<string, string> callback, ConversationItemStreamingPartDeltaUpdate update)
+    {
+        if (update.AudioBytes != null)
+        {
+            _speaker.EnqueueForPlayback(update.AudioBytes);
+        }
+
+        if (IsBufferingAssistantTextOutputs())
+        {
+            if (!string.IsNullOrEmpty(update.AudioTranscript)) BufferAssistantTextOutput(update.AudioTranscript);
+            if (!string.IsNullOrEmpty(update.Text)) BufferAssistantTextOutput(update.Text);
+        }
+        else
+        {
+            callback?.Invoke("assistant", update.AudioTranscript);
+            callback?.Invoke("assistant", update.Text);
+        }
+
+    }
+
+    private void HandleItemStreamingPartFinishedUpdate(Action<string, string> callback, ConversationItemStreamingPartFinishedUpdate update)
+    {
+        if (IsBufferingAssistantTextOutputs())
+        {
+            BufferAssistantTextOutput("\n");
+        }
+        else
+        {
+            callback?.Invoke("assistant", "\n");
+        }
+    }
+
+    private async Task HandleItemStreamingFinishedUpdateAsync(Action<string, string> callback, ConversationItemStreamingFinishedUpdate update)
+    {
+        if (_functionFactory.TryCallFunction(update.FunctionName, update.FunctionCallArguments, out var result))
+        {
+            var abbreviated = update.FunctionName.Contains("Listening");
+            var fnCall = !abbreviated
+                ? $"{update.FunctionName}({string.Join(", ", update.FunctionCallArguments)})"
+                : $"{update.FunctionName}()";
+            var output = !abbreviated
+                ? $"[{fnCall} => {result}]"
+                : $"[{fnCall}]";
+            HandleAssistantFunctionCallOutput(callback, output);
+
+            await _session.AddItemAsync(ConversationItem.CreateFunctionCallOutput(
+                callId: update.FunctionCallId,
+                output: result));
+        }
+    }
+
 
     private async Task HandleResponseFinishedUpdate(Action<string, string> callback, ConversationResponseFinishedUpdate responseFinishedUpdate)
     {
@@ -205,12 +231,24 @@ public class OpenAIRealtimeConversationSessionHelperClass
         if (responseFinishedUpdate.CreatedItems.Any(item => item.FunctionName?.Length > 0))
         {
             if (Program.Debug) Console.WriteLine($"  -- Ending client turn for pending tool responses");
-            await _session.StartResponseTurnAsync();
+            await _session.StartResponseAsync();
         }
         else
         {
             callback("user", "");
         }
+    }
+
+    private void Speaker_PlaybackStarted(object? sender, EventArgs e)
+    {
+        // if (_audioSourceController.State == AudioSourceState.OpenMic)
+        // {
+        //     _audioSourceController.Mute();
+        // }
+        // else if (_audioSourceController.State == AudioSourceState.KeywordArmed)
+        // {
+        //     _audioSourceController.TransitionToKeywordArmed();
+        // }
     }
 
     private void Speaker_PlaybackFinished(object? sender, EventArgs e)
@@ -233,29 +271,79 @@ public class OpenAIRealtimeConversationSessionHelperClass
         }
     }
 
-    private bool IsBufferingOutputTranscriptionDeltas()
+    private bool IsBufferingAssistantTextOutputs()
     {
-        return _bufferOutputTranscriptionDeltas != null;
+        return _bufferAssistantTextOutputs != null;
     }
 
-    private void StartBufferingOutputTranscriptionDeltas()
+    private void StartBufferingAssistantTextOutputs()
     {
-        _bufferOutputTranscriptionDeltas = new StringBuilder();
+        _bufferAssistantTextOutputs = new StringBuilder();
+        _bufferAssistantFunctionCallOutputs = new List<string>();
     }
 
-    private void BufferOutputTranscriptionDelta(string delta)
+    private void BufferAssistantTextOutput(string delta)
     {
-        _bufferOutputTranscriptionDeltas?.Append(delta);
+        _bufferAssistantTextOutputs?.Append(delta);
     }
 
-    private void StopBufferingOutputTranscriptionDeltas(Action<string, string> callback)
+    private void HandleAssistantFunctionCallOutput(Action<string, string> callback, string output)
     {
-        if (_bufferOutputTranscriptionDeltas != null)
+        // if (IsBufferingAssistantTextOutputs())
+        // {
+        //     BufferAssistantFunctionOutputs(output);
+        // }
+        // else
+        // {
+        //     callback?.Invoke("assistant", "");
+
+        //     var previous = Console.ForegroundColor;
+        //     Console.ForegroundColor = ConsoleColor.DarkGray;
+        //     ConsoleHelpers.Write($"\rassistant-function: {output}\n");
+        //     Console.ForegroundColor = previous;
+
+        //     callback?.Invoke("assistant", "");
+        //     ConsoleHelpers.Write("\rAssistant: ");
+        // }
+    }
+
+    private void BufferAssistantFunctionOutputs(string output)
+    {
+        _bufferAssistantFunctionCallOutputs?.Add(output);
+    }
+
+    private void StopBufferingAssistantTextOutputs(Action<string, string> callback)
+    {
+        if (_bufferAssistantFunctionCallOutputs != null)
         {
-            callback?.Invoke("assistant", _bufferOutputTranscriptionDeltas.ToString());
-            _bufferOutputTranscriptionDeltas = null;
+            if (_bufferAssistantFunctionCallOutputs.Count() > 0)
+            {
+                // callback?.Invoke("assistant", "");
+
+                // var previous = Console.ForegroundColor;
+                // Console.ForegroundColor = ConsoleColor.DarkGray;
+                // foreach (var output in _bufferAssistantFunctionCallOutputs)
+                // {
+                //     ConsoleHelpers.Write($"\rassistant-function: {output}\n");
+                // }
+                // Console.ForegroundColor = previous;
+                // callback?.Invoke("assistant", "");
+                // ConsoleHelpers.Write("\rAssistant: ");
+            }
+            _bufferAssistantFunctionCallOutputs = null;
+        }
+
+        if (_bufferAssistantTextOutputs != null)
+        {
+            callback?.Invoke("assistant", _bufferAssistantTextOutputs.ToString());
+            _bufferAssistantTextOutputs = null;
         }
     }
+
+    // private void StartListeningInternalAkaWakeUp()
+    // {
+    //     _audioSourceController.TransitionToOpenMic();
+    // }
 
     private void StopListeningInternalAkaGoToSleep()
     {
@@ -280,6 +368,7 @@ public class OpenAIRealtimeConversationSessionHelperClass
     private DateTime _responseStartedTime;
     private DateTime _responseFinishedTime;
 
-    private StringBuilder? _bufferOutputTranscriptionDeltas;
+    private StringBuilder? _bufferAssistantTextOutputs;
+    private List<string>? _bufferAssistantFunctionCallOutputs;
     private bool _ignoreNextFinishedAudioCue;
 }
