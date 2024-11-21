@@ -4,6 +4,7 @@
 //
 
 using System;
+using System.Diagnostics;
 
 public class OpenAIRealtimeChatStreamingCustomFunctions
 {
@@ -25,5 +26,15 @@ public class OpenAIRealtimeChatStreamingCustomFunctions
     {
         var date = DateTime.Now;
         return $"{date.Hour}:{date.Minute}:{date.Second}";
+    }
+
+    [HelperFunctionDescription("Launches a URL in the default browser.")]
+    public static void LaunchUrl(string url)
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = url,
+            UseShellExecute = true
+        });
     }
 }

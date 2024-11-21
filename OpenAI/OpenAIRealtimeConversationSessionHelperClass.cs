@@ -35,7 +35,8 @@ public class OpenAIRealtimeConversationSessionHelperClass
             {
                 Model = "whisper-1",
             },
-            Voice = "dan"
+            // Voice = "dan"
+            Voice = "cove"
             // Current choices: 'amuch', 'dan', 'elan', 'marilyn', 'meadow', 'breeze', 'cove', 'ember', 'jupiter', 'alloy', 'echo', and 'shimmer'
         };
 
